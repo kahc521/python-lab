@@ -223,3 +223,93 @@ def lambda_handler(event, context):
         _iam.delete_user(UserName=user)
         users_deleted.append(user)
         send_mail(users_deleted)```
+import boto3
+from botocore.exceptions import ClientError
+
+_iam = boto3.client('iam')
+
+def lambda_handler(event, context):
+    def list_incorrect_users():
+        """Function to get the list of incorrect users."""
+        _incorrect_users = []
+        users = _iam.list_users()
+        for i in users['Users']:
+            _incorrect_users.append(i['UserName'])
+
+        for user in _incorrect_users:
+            mfa = _iam.list_mfa_devices(UserName=user)
+            user_tags = _iam.list_user_tags(UserName=user)
+            tags_list = user_tags.get('Tags', [])
+            try:
+                _iam.get_login_profile(UserName=user)
+            except ClientError as e:
+                if len(mfa.get('MFADevices', [])) == 0 and len(tags_list) == 0:
+                    _incorrect_users.append(user)
+        return _incorrect_users
+
+    incorrect_users_list = list_incorrect_users()
+
+    def send_mail(user_list):
+        """Function to send the list of incorrect users to the security team."""
+        # Set a verified email address of security team 
+        RECIPIENT = ["<SET A VERIFIED EMAIL OF SECURITY TEAM>"]
+        # Set your verified sender email address
+        SENDER = "<SET A VERIFIED EMAIL OF SENDER>"
+        SUBJECT = "Deletion of incorrect users"
+        BODY_TEXT = (f"""
+        Hello Security team, 
+        This mail is to you notify that, the users in the list below have been deleted because they
+        created their account without password, MFA and tag. 
+        {user_list}""")           
+        CHARSET = "UTF-8"
+        # Set your aws region
+        AWS_REGION="<SET YOUR AWS REGION>"
+        ses_client = boto3.client('ses', region_name=AWS_REGION)
+        try:
+            response = ses_client.send_email(
+                Destination={
+                    'ToAddresses': RECIPIENT,
+                },
+                Message={
+                    'Body': {
+                        'Text': {
+                            'Charset': CHARSET,
+                            'Data': BODY_TEXT,
+                        },
+                    },
+                    'Subject': {
+                        'Charset': CHARSET,
+                        'Data': SUBJECT,
+                    },
+                },
+                Source=SENDER,
+            )
+            print(f"Email sent! Message ID: {response['MessageId']}")
+        except ClientError as e:
+            print(e.response['Error']['Message'])
+
+    def delete_user_items(user):
+        """Function to delete all items linked to a user."""
+        try:
+            access_keys_ids = []
+            list_access_keys = _iam.list_access_keys(UserName=user)
+            for access_key in list_access_keys['AccessKeyMetadata']:
+                access_keys_ids.append(access_key['AccessKeyId'])
+            if access_keys_ids:
+                for access_key_id in access_keys_ids:
+                    _iam.delete_access_key(UserName=user, AccessKeyId=access_key_id)
+                print(f"Access keys have been deleted for {user} !!")
+            else:
+                print(f"There are no access keys for {user} !!")
+        except ClientError as e:
+            print(e)
+        # Similarly handle other resource deletions
+        
+    # Delete incorrect users
+    for user in incorrect_users_list:
+        delete_user_items(user)
+        _iam.delete_user(UserName=user)
+        send_mail(incorrect_users_list)
+
+    # Corrected indentation for the last line
+    return
